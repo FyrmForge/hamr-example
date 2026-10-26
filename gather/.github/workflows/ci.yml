@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+    paths-ignore:
+      - "*.md"
+      - LICENSE
+      - .gitignore
+      - "docs/**"
+  pull_request:
+    branches: [master, main]
+    paths-ignore:
+      - "*.md"
+      - LICENSE
+      - .gitignore
+      - "docs/**"
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    # Optional: uncomment this service and the migration step below
+    # if you want CI to apply schema changes as part of the workflow.
+    # services:
+    #   postgres:
+    #     image: postgres:16
+    #     env:
+    #       POSTGRES_USER: postgres
+    #       POSTGRES_PASSWORD: postgres
+    #       POSTGRES_DB: gather
+    #     ports:
+    #       - 5432:5432
+    #     options: >-
+    #       --health-cmd "pg_isready -U postgres -d gather"
+    #       --health-interval 10s
+    #       --health-timeout 5s
+    #       --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.2"
+
+      - name: Download Go modules
+        run: go mod download
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install deps
+        run: make install
+
+      # Before Build: make build regenerates the files, which would hide staleness.
+      - name: Verify generated templ files are up to date
+        run: make templ-check
+
+      - name: Build
+        run: make build
+
+      - name: Verify compiled CSS is committed
+        run: |
+          if ! git diff --quiet -- 'frontend/static/css/output.css'; then
+            echo "::error::Compiled CSS is out of date. Run 'make css-build' and commit."
+            git diff --stat -- 'frontend/static/css/output.css'
+            exit 1
+          fi
+
+      - name: Verify generated static pages are committed
+        run: |
+          if ! git diff --quiet -- 'generated/'; then
+            echo "::error::Generated static pages are out of date. Run 'make generate' and commit."
+            git diff --stat -- 'generated/'
+            exit 1
+          fi
+      # - name: Run migrations
+      #   env:
+      #     DATABASE_URL: postgres://postgres:postgres@localhost:5432/gather?sslmode=disable
+      #   run: make migrate
+
+      - name: Run tests
+        run: make test
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+
+      - name: Lint templ files
+        run: make templint

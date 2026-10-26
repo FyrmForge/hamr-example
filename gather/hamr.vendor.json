@@ -1,0 +1,16 @@
+{
+  "deps": {
+    "htmx": {
+      "version": "2.0.11",
+      "url": "https://unpkg.com/htmx.org@2.0.11/dist/htmx.min.js",
+      "out": "frontend/static/js/htmx.min.js",
+      "sha256": "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717"
+    },
+    "idiomorph": {
+      "version": "0.3.0",
+      "url": "https://unpkg.com/idiomorph@0.3.0/dist/idiomorph.min.js",
+      "out": "frontend/static/js/idiomorph.min.js",
+      "sha256": "cfbc37ff80a7872dc40da84bf352444c4b79179e8da122f66f72e885e5adff19"
+    }
+  }
+}

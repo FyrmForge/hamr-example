@@ -1,0 +1,55 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+
+	"github.com/FyrmForge/hamr-example/gather/internal/repo"
+	"github.com/jmoiron/sqlx"
+)
+
+// Users returns the user sub-store.
+func (s *Store) Users() repo.UserStore { return &userStore{db: s.db} }
+
+type userStore struct {
+	db *sqlx.DB
+}
+
+func (s *userStore) GetByID(ctx context.Context, id string) (*repo.User, error) {
+	var u repo.User
+	err := s.db.GetContext(ctx, &u,
+		`SELECT id, email, password_hash, name, role, active, created_at, updated_at
+		 FROM users WHERE id = $1`, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *userStore) GetByEmail(ctx context.Context, email string) (*repo.User, error) {
+	var u repo.User
+	err := s.db.GetContext(ctx, &u,
+		`SELECT id, email, password_hash, name, role, active, created_at, updated_at
+		 FROM users WHERE email = $1`, email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *userStore) Create(ctx context.Context, user *repo.User) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO users (id, email, password_hash, name, role, active, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		user.ID, user.Email, user.PasswordHash, user.Name, user.Role,
+		user.Active, user.CreatedAt, user.UpdatedAt,
+	)
+	return err
+}

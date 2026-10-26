@@ -1,0 +1,324 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"context"
+	"database/sql"
+	_ "embed"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	_ "github.com/lib/pq"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+var serverURL string
+
+//go:embed testdata/seed_e2e.sql
+var e2eSeedSQL string
+
+// TestEnvironment holds the test infrastructure.
+type TestEnvironment struct {
+	PostgresContainer *tcpostgres.PostgresContainer
+	ServerContainer   testcontainers.Container
+	DB                *sql.DB
+	ServerURL         string
+	Cleanup           func()
+}
+
+var sharedEnv *TestEnvironment
+
+// SetupSharedEnvironment initializes the test environment.
+// In local mode, it spawns ../bin/site on a free port (walking +1 from 8080)
+// against the local database, or attaches to E2E_SERVER_URL when set.
+// In container mode, it starts PostgreSQL and the server via testcontainers.
+func SetupSharedEnvironment(local bool) {
+	if local {
+		sharedEnv = setupLocalEnvironment()
+		serverURL = sharedEnv.ServerURL
+		return
+	}
+
+	ctx := context.Background()
+
+	// Create a custom network so containers can communicate via DNS aliases.
+	networkName := fmt.Sprintf("e2e-test-network-%d", time.Now().Unix())
+	_, err := testcontainers.GenericNetwork(ctx, testcontainers.GenericNetworkRequest{
+		NetworkRequest: testcontainers.NetworkRequest{
+			Name:           networkName,
+			CheckDuplicate: false,
+		},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to create network: %v", err))
+	}
+
+	// Start PostgreSQL container.
+	pgContainer, err := tcpostgres.Run(ctx,
+		"postgres:18-alpine",
+		tcpostgres.WithDatabase("gather_e2e"),
+		tcpostgres.WithUsername("postgres"),
+		tcpostgres.WithPassword("postgres"),
+		testcontainers.CustomizeRequest(testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Networks:       []string{networkName},
+				NetworkAliases: map[string][]string{networkName: {"postgres"}},
+			},
+		}),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to start PostgreSQL container: %v", err))
+	}
+
+	// Connect to DB from the host for seeding.
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to get connection string: %v", err))
+	}
+
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to connect to database: %v", err))
+	}
+
+	for range 10 {
+		if err := db.Ping(); err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Database URL for the server container (uses network alias).
+	containerDBURL := "postgres://postgres:postgres@postgres:5432/gather_e2e?sslmode=disable"
+
+	// Build and start the server container.
+	serverContainer, srvURL := startServerContainer(ctx, containerDBURL, networkName)
+
+	// Wait for the server to complete migrations.
+	if err := waitForMigrations(db); err != nil {
+		panic(fmt.Sprintf("E2E: migrations did not complete: %v", err))
+	}
+
+	// Seed test data.
+	if err := seedTestData(db); err != nil {
+		panic(fmt.Sprintf("E2E: failed to seed test data: %v", err))
+	}
+
+	sharedEnv = &TestEnvironment{
+		PostgresContainer: pgContainer,
+		ServerContainer:   serverContainer,
+		DB:                db,
+		ServerURL:         srvURL,
+		Cleanup: func() {
+			_ = serverContainer.Terminate(ctx)
+			db.Close()
+			_ = pgContainer.Terminate(ctx)
+		},
+	}
+	serverURL = srvURL
+
+	fmt.Printf("E2E: server ready at %s\n", serverURL)
+}
+
+// TeardownSharedEnvironment cleans up containers and processes.
+func TeardownSharedEnvironment() {
+	if sharedEnv != nil {
+		sharedEnv.Cleanup()
+		sharedEnv = nil
+	}
+}
+
+func startServerContainer(ctx context.Context, dbURL string, network string) (testcontainers.Container, string) {
+	projectRoot, err := filepath.Abs("..")
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to get project root: %v", err))
+	}
+
+	req := testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    projectRoot,
+			Dockerfile: "cmd/site/Dockerfile",
+			KeepImage:  true,
+		},
+		ExposedPorts: []string{"8080/tcp"},
+		Networks:     []string{network},
+		Env: map[string]string{
+			"DATABASE_URL": dbURL,
+			"PORT":         "8080",
+			"DEV_MODE":     "false",
+		},
+		WaitingFor: wait.ForHTTP("/api/health").WithPort("8080/tcp").WithStartupTimeout(60 * time.Second),
+	}
+
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to start server container: %v", err))
+	}
+
+	mappedPort, err := container.MappedPort(ctx, "8080")
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to get server port: %v", err))
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to get server host: %v", err))
+	}
+
+	srvURL := fmt.Sprintf("http://%s:%s", host, mappedPort.Port())
+	fmt.Printf("E2E: server started at %s\n", srvURL)
+
+	return container, srvURL
+}
+
+func waitForMigrations(db *sql.DB) error {
+	for i := range 50 {
+		var exists bool
+		err := db.QueryRow(`
+			SELECT EXISTS (
+				SELECT FROM information_schema.tables
+				WHERE table_schema = 'public'
+				AND table_name = 'users'
+			);
+		`).Scan(&exists)
+
+		if err == nil && exists {
+			fmt.Printf("E2E: migrations complete after %d checks\n", i+1)
+			return nil
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("migrations did not complete within 10 seconds")
+}
+
+func seedTestData(db *sql.DB) error {
+	if e2eSeedSQL == "" {
+		return nil
+	}
+	fmt.Println("E2E: seeding test data...")
+	_, err := db.Exec(e2eSeedSQL)
+	if err != nil {
+		return fmt.Errorf("seed: %w", err)
+	}
+	fmt.Println("E2E: seed complete")
+	return nil
+}
+
+func setupLocalEnvironment() *TestEnvironment {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://postgres:postgres@localhost:5439/gather?sslmode=disable"
+	}
+
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		panic(fmt.Sprintf("E2E: failed to connect to local database: %v", err))
+	}
+	if err := db.Ping(); err != nil {
+		panic(fmt.Sprintf("E2E: failed to ping local database: %v", err))
+	}
+
+	// E2E_SERVER_URL set: attach to a server someone else is running.
+	if srvURL := os.Getenv("E2E_SERVER_URL"); srvURL != "" {
+		fmt.Printf("E2E: using local server at %s\n", srvURL)
+		if err := seedTestData(db); err != nil {
+			panic(fmt.Sprintf("E2E: failed to seed test data: %v", err))
+		}
+		return &TestEnvironment{DB: db, ServerURL: srvURL, Cleanup: func() { db.Close() }}
+	}
+
+	// Otherwise spawn our own server on the first free port from 8080.
+	port := freePort(8080, 50)
+	srvURL := fmt.Sprintf("http://localhost:%d", port)
+
+	bin, err := filepath.Abs("../bin/site")
+	if err != nil {
+		panic(fmt.Sprintf("E2E: resolve server binary: %v", err))
+	}
+	cmd := exec.Command(bin)
+	cmd.Dir = filepath.Dir(filepath.Dir(bin))
+	cmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port), "DATABASE_URL="+dbURL)
+	// Server output goes to a file, not our stdout: inheriting the test's
+	// stdout keeps go test's pipe open until the child exits.
+	_ = os.MkdirAll("testdata/e2e-artifacts", 0o755)
+	logFile, err := os.Create("testdata/e2e-artifacts/site.log")
+	if err != nil {
+		panic(fmt.Sprintf("E2E: create server log: %v", err))
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		panic(fmt.Sprintf("E2E: start %s (run `make build` first?): %v", bin, err))
+	}
+	fmt.Printf("E2E: started local server at %s (pid %d, log testdata/e2e-artifacts/site.log)\n", srvURL, cmd.Process.Pid)
+
+	if err := waitForHealth(srvURL + "/api/health"); err != nil {
+		_ = cmd.Process.Kill()
+		panic(fmt.Sprintf("E2E: server did not become healthy: %v", err))
+	}
+
+	if err := seedTestData(db); err != nil {
+		_ = cmd.Process.Kill()
+		panic(fmt.Sprintf("E2E: failed to seed test data: %v", err))
+	}
+
+	return &TestEnvironment{
+		DB:        db,
+		ServerURL: srvURL,
+		Cleanup: func() {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			logFile.Close()
+			db.Close()
+		},
+	}
+}
+
+// freePort returns the first port from start that accepts a TCP bind,
+// walking +1 up to maxAttempts times. Mirrors hamr dev's port walk.
+func freePort(start, maxAttempts int) int {
+	for port := start; port < start+maxAttempts; port++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
+		if err != nil {
+			continue
+		}
+		ln.Close()
+		if port != start {
+			fmt.Printf("E2E: port %d busy, walked to %d\n", start, port)
+		}
+		return port
+	}
+	panic(fmt.Sprintf("E2E: no free port in %d-%d", start, start+maxAttempts-1))
+}
+
+func waitForHealth(url string) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("%s not healthy within 30s", url)
+}

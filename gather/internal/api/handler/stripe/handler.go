@@ -1,0 +1,333 @@
+package stripe
+
+import (
+	"context"
+	"io"
+	"net/http"
+
+	"github.com/labstack/echo/v4"
+	"github.com/stripe/stripe-go/v86"
+	"github.com/stripe/stripe-go/v86/webhook"
+
+	"github.com/FyrmForge/hamr/pkg/logging"
+)
+
+// maxBodyBytes limits the size of the incoming webhook payload. 512KB
+// covers Stripe's heaviest documented events (invoices with many line
+// items, expanded objects) without leaving room for runaway payloads.
+const maxBodyBytes = 512 * 1024
+
+type handler struct {
+	webhookSecret   string
+	webhookSecretV2 string
+	client          *stripe.Client
+	handlers        map[string]func(ctx context.Context, event stripe.Event) error
+	thinHandlers    map[string]func(ctx context.Context, n stripe.EventNotificationContainer) error
+}
+
+// NewHandler creates the Stripe webhook handler. It serves two routes:
+// HandleWebhook for v1 snapshot events (the object is in the payload) and
+// HandleThinWebhook for v2 thin event notifications (Accounts v2 changes,
+// which only point at the object). client verifies thin events and fetches
+// what they point at.
+//
+// The dispatch maps below stub every event the hamr Stripe mock fires
+// during `hamr dev` so unhandled events are visible at scaffold time
+// rather than silently 200-OK'd. Replace each stub body with your own
+// business logic; delete the entries you don't care about.
+func NewHandler(webhookSecret, webhookSecretV2 string, client *stripe.Client) *handler {
+	h := &handler{
+		webhookSecret:   webhookSecret,
+		webhookSecretV2: webhookSecretV2,
+		client:          client,
+	}
+	h.handlers = map[string]func(ctx context.Context, event stripe.Event) error{
+		// Checkout sessions (mock fires from /__hamr/stripe/checkout buttons).
+		"checkout.session.completed":            h.handleCheckoutSessionCompleted,
+		"checkout.session.expired":              h.handleCheckoutSessionExpired,
+		"checkout.session.async_payment_failed": h.handleCheckoutSessionAsyncPaymentFailed,
+
+		// PaymentIntents (mock fires from /__hamr/stripe/payment_intent).
+		"payment_intent.succeeded":      h.handlePaymentIntentSucceeded,
+		"payment_intent.payment_failed": h.handlePaymentIntentPaymentFailed,
+		"charge.succeeded":              h.handleChargeSucceeded,
+
+		// Refunds (mock fires on refund create).
+		"charge.refunded": h.handleChargeRefunded,
+
+		// Connect transfers (mock fires on transfer create and reversal).
+		"transfer.created":  h.handleTransferCreated,
+		"transfer.reversed": h.handleTransferReversed,
+
+		// Payouts (mock fires from /__hamr/stripe/payout). On a connected
+		// account event.Account names the account.
+		"payout.paid":   h.handlePayoutPaid,
+		"payout.failed": h.handlePayoutFailed,
+
+		// Disputes (mock fires from the Dispute / Close buttons on /__hamr/stripe).
+		"charge.dispute.created":          h.handleDisputeCreated,
+		"charge.dispute.funds_withdrawn":  h.handleDisputeFundsWithdrawn,
+		"charge.dispute.closed":           h.handleDisputeClosed,
+		"charge.dispute.funds_reinstated": h.handleDisputeFundsReinstated,
+
+		// Subscriptions (mock fires when a mode=subscription checkout completes,
+		// and on each renewal when the mock clock is advanced from /__hamr/stripe
+		// or the stripe.advance / stripe.subscription MCP tools).
+		"customer.subscription.created": h.handleSubscriptionCreated,
+		"customer.subscription.updated": h.handleSubscriptionUpdated,
+		"customer.subscription.deleted": h.handleSubscriptionDeleted,
+		"invoice.paid":                  h.handleInvoicePaid,
+		"invoice.payment_succeeded":     h.handleInvoicePaymentSucceeded,
+		"invoice.payment_failed":        h.handleInvoicePaymentFailed,
+		"invoice.voided":                h.handleInvoiceVoided,
+	}
+	h.thinHandlers = map[string]func(ctx context.Context, n stripe.EventNotificationContainer) error{
+		// Connect accounts v2 (mock fires when onboarding completes on
+		// /__hamr/stripe/onboarding). Register these same types on your
+		// Stripe event destination and in `stripe listen --thin-events`.
+		"v2.core.account[requirements].updated":                              h.handleAccountRequirementsUpdated,
+		"v2.core.account[configuration.recipient].capability_status_updated": h.handleRecipientCapabilityStatusUpdated,
+	}
+	return h
+}
+
+// HandleWebhook verifies the Stripe signature and dispatches a v1 snapshot
+// event. A thin v2 payload is rejected by ConstructEvent, so a crossed route
+// fails loudly.
+// POST /api/webhooks/stripe
+func (h *handler) HandleWebhook(c echo.Context) error {
+	r := c.Request()
+	payload, err := readBody(c)
+	if err != nil {
+		logging.FromContext(r.Context()).Error("failed to read webhook body", "error", err)
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	sig := r.Header.Get("Stripe-Signature")
+	event, err := webhook.ConstructEvent(payload, sig, h.webhookSecret)
+	if err != nil {
+		logging.FromContext(r.Context()).Error("failed to verify webhook signature", "error", err)
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	ctx := r.Context()
+	log := logging.FromContext(ctx)
+
+	fn, ok := h.handlers[string(event.Type)]
+	if !ok {
+		log.Info("unhandled stripe event", "type", event.Type)
+		return c.NoContent(http.StatusOK)
+	}
+
+	if err := fn(ctx, event); err != nil {
+		log.Error("stripe event handler failed", "type", event.Type, "error", err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	return c.NoContent(http.StatusOK)
+}
+
+// HandleThinWebhook verifies and dispatches a v2 thin event notification.
+// The notification carries no object; fetch what it points at with h.client.
+// POST /api/webhooks/stripe/v2
+func (h *handler) HandleThinWebhook(c echo.Context) error {
+	r := c.Request()
+	ctx := r.Context()
+	log := logging.FromContext(ctx)
+
+	payload, err := readBody(c)
+	if err != nil {
+		log.Error("failed to read v2 webhook body", "error", err)
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	container, err := h.client.ParseEventNotification(payload, r.Header.Get("Stripe-Signature"), h.webhookSecretV2)
+	if err != nil {
+		log.Error("failed to verify v2 webhook signature", "error", err)
+		return c.NoContent(http.StatusBadRequest)
+	}
+	n := container.GetEventNotification()
+
+	fn, ok := h.thinHandlers[n.Type]
+	if !ok {
+		log.Info("unhandled stripe thin event", "type", n.Type)
+		return c.NoContent(http.StatusOK)
+	}
+	if err := fn(ctx, container); err != nil {
+		log.Error("stripe thin event handler failed", "type", n.Type, "error", err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func readBody(c echo.Context) ([]byte, error) {
+	r := c.Request()
+	r.Body = http.MaxBytesReader(c.Response().Writer, r.Body, maxBodyBytes)
+	return io.ReadAll(r.Body)
+}
+
+// --- Connect accounts v2 ---
+
+// handleAccountRequirementsUpdated fires when Stripe needs more (or has
+// everything) from a connected account. Fetch the account to see where it
+// stands.
+func (h *handler) handleAccountRequirementsUpdated(ctx context.Context, n stripe.EventNotificationContainer) error {
+	e, ok := n.(*stripe.V2CoreAccountIncludingRequirementsUpdatedEventNotification)
+	if !ok {
+		return nil
+	}
+	logging.FromContext(ctx).Info("account requirements updated", "eventID", e.ID, "account", e.RelatedObject.ID)
+	return nil
+}
+
+// handleRecipientCapabilityStatusUpdated fires when a recipient capability
+// changes, e.g. stripe_balance.stripe_transfers becoming active once
+// onboarding is done. Until it is active, /v1/transfers to the account is
+// refused.
+func (h *handler) handleRecipientCapabilityStatusUpdated(ctx context.Context, n stripe.EventNotificationContainer) error {
+	e, ok := n.(*stripe.V2CoreAccountIncludingConfigurationRecipientCapabilityStatusUpdatedEventNotification)
+	if !ok {
+		return nil
+	}
+	acct, err := h.client.V2CoreAccounts.Retrieve(ctx, e.RelatedObject.ID, &stripe.V2CoreAccountRetrieveParams{
+		Include: stripe.StringSlice([]string{"configuration.recipient"}),
+	})
+	if err != nil {
+		return err
+	}
+	transfers := ""
+	if cfg := acct.Configuration; cfg != nil && cfg.Recipient != nil && cfg.Recipient.Capabilities != nil &&
+		cfg.Recipient.Capabilities.StripeBalance != nil && cfg.Recipient.Capabilities.StripeBalance.StripeTransfers != nil {
+		transfers = string(cfg.Recipient.Capabilities.StripeBalance.StripeTransfers.Status)
+	}
+	logging.FromContext(ctx).Info("recipient capability updated", "eventID", e.ID, "account", acct.ID, "stripe_transfers", transfers)
+	return nil
+}
+
+// --- Checkout sessions ---
+
+func (h *handler) handleCheckoutSessionCompleted(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("checkout session completed", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleCheckoutSessionExpired(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("checkout session expired", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleCheckoutSessionAsyncPaymentFailed(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("checkout session async payment failed", "eventID", event.ID)
+	return nil
+}
+
+// --- PaymentIntents ---
+
+func (h *handler) handlePaymentIntentSucceeded(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("payment intent succeeded", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handlePaymentIntentPaymentFailed(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("payment intent payment failed", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleChargeSucceeded(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("charge succeeded", "eventID", event.ID)
+	return nil
+}
+
+// --- Refunds ---
+
+func (h *handler) handleChargeRefunded(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("charge refunded", "eventID", event.ID)
+	return nil
+}
+
+// --- Connect transfers ---
+
+func (h *handler) handleTransferCreated(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("transfer created", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleTransferReversed(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("transfer reversed", "eventID", event.ID)
+	return nil
+}
+
+// --- Payouts ---
+
+func (h *handler) handlePayoutPaid(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("payout paid", "eventID", event.ID, "account", event.Account)
+	return nil
+}
+
+func (h *handler) handlePayoutFailed(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("payout failed", "eventID", event.ID, "account", event.Account)
+	return nil
+}
+
+// --- Disputes ---
+
+func (h *handler) handleDisputeCreated(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("dispute created", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleDisputeFundsWithdrawn(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("dispute funds withdrawn", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleDisputeClosed(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("dispute closed", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleDisputeFundsReinstated(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("dispute funds reinstated", "eventID", event.ID)
+	return nil
+}
+
+// --- Subscriptions ---
+//
+// Gate access on the subscription's status carried in these events, not on
+// wall-clock comparisons against current_period_end: the mock clock (and a
+// Stripe test clock) can be well ahead of your server's time.
+
+func (h *handler) handleSubscriptionCreated(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("subscription created", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleSubscriptionUpdated(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("subscription updated", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleSubscriptionDeleted(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("subscription deleted", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleInvoicePaid(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("invoice paid", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleInvoicePaymentSucceeded(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("invoice payment succeeded", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleInvoicePaymentFailed(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("invoice payment failed", "eventID", event.ID)
+	return nil
+}
+
+func (h *handler) handleInvoiceVoided(ctx context.Context, event stripe.Event) error {
+	logging.FromContext(ctx).Info("invoice voided", "eventID", event.ID)
+	return nil
+}
