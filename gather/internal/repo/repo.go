@@ -25,4 +25,7 @@ type Store interface {
 
 	// Users returns the user sub-store.
 	Users() UserStore
+
+	// Events returns the event sub-store.
+	Events() EventStore
 }

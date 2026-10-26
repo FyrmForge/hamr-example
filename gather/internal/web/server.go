@@ -39,6 +39,8 @@ type Deps struct {
 
 	AuthService *service.AuthService
 
+	EventService *service.EventService
+
 	FileStorage storage.FileStorage
 
 	// EmailSender is the outbound mail transport. In dev it points at the

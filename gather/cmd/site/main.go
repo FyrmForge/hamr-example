@@ -148,6 +148,7 @@ func main() {
 
 	// Auth service.
 	authService := service.NewAuthService(store)
+	eventService := service.NewEventService(store)
 
 	// File storage (local).
 	fileStorage, err := storage.NewLocalStorage(envStoragePath)
@@ -213,6 +214,7 @@ func main() {
 		DevActions: devactions.New(database, store, sessionManager).Handler(),
 		SessionManager: sessionManager,
 		AuthService: authService,
+		EventService: eventService,
 		FileStorage: fileStorage,
 		EmailSender: emailSender,
 	})
