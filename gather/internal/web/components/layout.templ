@@ -15,6 +15,7 @@ templ Layout(c echo.Context, title string) {
 		<link rel="stylesheet" href={ StaticURL("css/output.css") }/>
 	</head>
 	<body class="bg-hamr-metal-dark text-hamr-metal-steel min-h-screen">
+		@nav(c)
 		if flash := middleware.GetFlash(c); flash != nil {
 			<div class={ "max-w-4xl mx-auto mt-4 px-4 py-3 rounded-md border text-sm", FlashTailwindClass(flash.Type) }>
 				{ flash.Message }
@@ -40,4 +41,24 @@ templ Layout(c echo.Context, title string) {
 		</script>
 	</body>
 	</html>
+}
+
+// nav is the top bar: the brand, then either the signed-in user with a
+// log-out button or links to log in and sign up.
+templ nav(c echo.Context) {
+	<nav class="border-b border-hamr-metal-light/20">
+		<div class="max-w-4xl mx-auto px-4 flex flex-wrap items-center gap-x-6 gap-y-1 min-h-14">
+			<a href="/" class="font-bold text-lg text-hamr-metal-steel py-3">Gather</a>
+			<div class="ml-auto flex items-center gap-4 text-sm">
+				if user := GetUser(c); user != nil {
+					<span class="text-hamr-metal-light" data-testid="nav-user">{ user.Email }</span>
+					<input type="hidden" name="csrf_token" value={ csrfToken(c) }/>
+					<button type="button" hx-post="/logout" class="py-3 text-hamr-metal-steel hover:text-hamr-fire-glow">Log out</button>
+				} else {
+					<a href="/login" class="py-3 hover:text-hamr-fire-glow">Log in</a>
+					<a href="/register" class="py-3 hover:text-hamr-fire-glow">Sign up</a>
+				}
+			</div>
+		</div>
+	</nav>
 }

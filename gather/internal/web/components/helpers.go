@@ -69,3 +69,13 @@ func GetUser(c echo.Context) *repo.User {
 	u, _ := middleware.GetSubject(c).(*repo.User)
 	return u
 }
+
+// csrfToken returns the request's CSRF token, or "" when there is none
+// (error pages and statically generated pages render without a request).
+func csrfToken(c echo.Context) string {
+	if c == nil {
+		return ""
+	}
+	t, _ := c.Get("csrf").(string)
+	return t
+}
