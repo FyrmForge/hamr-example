@@ -43,7 +43,7 @@ func homePage(c echo.Context) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"max-w-4xl mx-auto px-6 py-16 text-center\"><h1 class=\"text-4xl font-bold text-hamr-metal-steel mb-4\">gather</h1><p class=\"text-lg text-hamr-metal-light max-w-xl mx-auto\">Your HAMR project is up and running.</p><div class=\"mt-8\"><code class=\"inline-block bg-hamr-metal-mid border border-hamr-metal-light/20 rounded-md px-6 py-2 font-mono text-sm text-hamr-fire-glow\">hamr dev</code></div></main>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<main class=\"max-w-4xl mx-auto px-6 py-16 text-center\"><h1 class=\"text-4xl font-bold text-hamr-metal-steel mb-4\">Gather</h1><p class=\"text-lg text-hamr-metal-light max-w-xl mx-auto\">Find events near you, RSVP in one click, and buy a ticket.</p><div class=\"mt-8\"><code class=\"inline-block bg-hamr-metal-mid border border-hamr-metal-light/20 rounded-md px-6 py-2 font-mono text-sm text-hamr-fire-glow\">hamr dev</code></div></main>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
