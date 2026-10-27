@@ -39,6 +39,20 @@ hamr_console_filter = false
 # cmd = ""                  # custom command instead; must contain {port}
 # env = ["BASE_URL"]
 
+# MCP gateway for coding agents (hamr setup writes this block; `hamr mcp install`
+# registers the bridge with the agent). Default-deny: only the areas below.
+[dev.mcp]
+enabled = true
+make_targets = ["test", "templ-check", "seed"]
+
+[dev.mcp.access]
+dev    = "read"
+logs   = "read"
+docker = "read"
+mail   = "write"
+stripe = "write"
+build  = "write"
+
 [dev.email]
 enabled = true
 
