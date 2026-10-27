@@ -21,7 +21,6 @@ import (
 	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/auth/register"
 	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/devemail"
 	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/events"
-	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/home"
 )
 
 // Deps holds the dependencies for route registration.
@@ -85,8 +84,6 @@ func RegisterRoutes(srv *server.Server, deps *Deps) {
 	)
 	site.Use(auth.Load())
 
-	homeHandler := home.NewHandler()
-	site.GET("/", homeHandler.Index)
 
 	// Dev-only sample email endpoint. Sends a test message through the
 	// configured email.Sender so you can smoke-test the /__hamr/mail inbox.
@@ -109,6 +106,8 @@ func RegisterRoutes(srv *server.Server, deps *Deps) {
 	site.POST("/register/validate/:field", registerHandler.FormRules.ValidationHandler("field"), auth.RequireNotAuth())
 
 	eventsHandler := events.NewHandler(deps.EventService)
+	site.GET("/", eventsHandler.Index)
+	site.GET("/events/:id", eventsHandler.Show)
 	site.GET("/events/new", eventsHandler.New, auth.RequireAuth())
 	site.POST("/events", eventsHandler.Create, auth.RequireAuth())
 	site.POST("/events/validate/:field", eventsHandler.FormRules.ValidationHandler("field"), auth.RequireAuth())

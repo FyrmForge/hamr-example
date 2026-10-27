@@ -1,0 +1,28 @@
+package events
+
+import (
+	"strconv"
+
+	"github.com/labstack/echo/v4"
+
+	"github.com/FyrmForge/hamr-example/gather/internal/repo"
+	"github.com/FyrmForge/hamr-example/gather/internal/web/components"
+)
+
+templ showPage(c echo.Context, e *repo.Event) {
+	@components.Layout(c, e.Title) {
+		<main class="max-w-2xl mx-auto px-4 py-10">
+			<p class="text-sm text-hamr-metal-light mb-2">
+				{ when(e) }
+				if e.Location != "" {
+					· { e.Location }
+				}
+			</p>
+			<h1 class="text-3xl font-bold text-slate-100">{ e.Title }</h1>
+			if e.Description != "" {
+				<p class="mt-4 text-hamr-metal-steel leading-relaxed whitespace-pre-line max-w-prose">{ e.Description }</p>
+			}
+			<p class="mt-6 text-sm text-hamr-metal-light">{ strconv.Itoa(e.Capacity) } places</p>
+		</main>
+	}
+}

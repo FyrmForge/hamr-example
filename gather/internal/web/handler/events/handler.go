@@ -11,6 +11,7 @@ import (
 	"github.com/FyrmForge/hamr/pkg/validate"
 	"github.com/labstack/echo/v4"
 
+	"github.com/FyrmForge/hamr-example/gather/internal/repo"
 	"github.com/FyrmForge/hamr-example/gather/internal/service"
 	"github.com/FyrmForge/hamr-example/gather/internal/web/components/form"
 )
@@ -48,6 +49,27 @@ func NewHandler(events *service.EventService) *handler {
 	}
 }
 
+// GET /
+func (h *handler) Index(c echo.Context) error {
+	list, err := h.events.Upcoming(c.Request().Context())
+	if err != nil {
+		return err
+	}
+	return respond.HTML(c, http.StatusOK, indexPage(c, list))
+}
+
+// GET /events/:id
+func (h *handler) Show(c echo.Context) error {
+	e, err := h.events.Get(c.Request().Context(), c.Param("id"))
+	if err != nil {
+		return err
+	}
+	if e == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "event not found")
+	}
+	return respond.HTML(c, http.StatusOK, showPage(c, e))
+}
+
 // GET /events/new
 func (h *handler) New(c echo.Context) error {
 	return respond.HTML(c, http.StatusOK, newPage(c, EventForm{}, nil))
@@ -69,7 +91,8 @@ func (h *handler) Create(c echo.Context) error {
 		Capacity:    f.Capacity,
 		Description: f.Description,
 	}
-	if _, err := h.events.Create(c.Request().Context(), middleware.GetSubjectID(c), in); err != nil {
+	e, err := h.events.Create(c.Request().Context(), middleware.GetSubjectID(c), in)
+	if err != nil {
 		if errors.Is(err, service.ErrInvalidEvent) {
 			return respond.HTML(c, http.StatusUnprocessableEntity, eventForm(c, f, map[string]string{
 				"general": "Check the details and try again.",
@@ -78,7 +101,7 @@ func (h *handler) Create(c echo.Context) error {
 		return err
 	}
 	middleware.SetFlash(c, "Event created.", middleware.FlashSuccess)
-	return respond.Redirect(c, "/")
+	return respond.Redirect(c, "/events/"+e.ID)
 }
 
 // positiveInt is a custom rule: any func(string) string is a validate.Rule.
@@ -99,4 +122,9 @@ func inTheFuture(v string) string {
 		return "Pick a time in the future"
 	}
 	return ""
+}
+
+// when formats an event's start, e.g. "Sat 14 Nov, 19:00".
+func when(e *repo.Event) string {
+	return e.StartsAt.Format("Mon 2 Jan, 15:04")
 }

@@ -1,0 +1,50 @@
+package events
+
+import (
+	"github.com/labstack/echo/v4"
+
+	"github.com/FyrmForge/hamr-example/gather/internal/repo"
+	"github.com/FyrmForge/hamr-example/gather/internal/web/components"
+)
+
+templ indexPage(c echo.Context, list []repo.Event) {
+	@components.Layout(c, "Events") {
+		<main class="max-w-4xl mx-auto px-4 py-10">
+			<h1 class="text-2xl font-bold text-slate-100 mb-6">Upcoming events</h1>
+			if len(list) == 0 {
+				@emptyState(components.GetUser(c) != nil)
+			} else {
+				<ul class="divide-y divide-hamr-metal-light/20 border-y border-hamr-metal-light/20" data-testid="event-list">
+					for i := range list {
+						@eventRow(&list[i])
+					}
+				</ul>
+			}
+		</main>
+	}
+}
+
+templ eventRow(e *repo.Event) {
+	<li>
+		<a href={ templ.SafeURL("/events/" + e.ID) } class="block py-4 hover:bg-hamr-metal-mid/40 px-2 -mx-2 rounded">
+			<p class="text-sm text-hamr-metal-light">
+				{ when(e) }
+				if e.Location != "" {
+					· { e.Location }
+				}
+			</p>
+			<p class="text-lg font-semibold text-slate-100">{ e.Title }</p>
+		</a>
+	</li>
+}
+
+templ emptyState(signedIn bool) {
+	<div class="border border-dashed border-hamr-metal-light/40 rounded-lg p-10 text-center" data-testid="empty-state">
+		<p class="text-slate-100 font-medium">Nothing on yet.</p>
+		if signedIn {
+			<p class="mt-2 text-hamr-metal-light">Be the first: <a href="/events/new" class="underline hover:text-hamr-fire-glow">create an event</a>.</p>
+		} else {
+			<p class="mt-2 text-hamr-metal-light"><a href="/register" class="underline hover:text-hamr-fire-glow">Sign up</a> to create the first one.</p>
+		}
+	</div>
+}
