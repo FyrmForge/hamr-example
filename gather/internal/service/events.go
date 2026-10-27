@@ -29,6 +29,7 @@ type NewEvent struct {
 	Location    string
 	StartsAt    string // StartsAtLayout, read as UTC
 	Capacity    string
+	Price       string // euros, e.g. "5" or "7.50"; empty means free
 }
 
 // mailFrom is the sender of Gather's notifications.
@@ -77,6 +78,7 @@ func (a Attendance) Full() bool { return a.Going >= a.Capacity }
 type EventView struct {
 	Event      *repo.Event
 	Attendance Attendance
+	Ticket     *repo.Ticket // the viewer's paid ticket, if any
 }
 
 // View returns the event with id as viewerID sees it (viewerID may be
@@ -90,7 +92,13 @@ func (s *EventService) View(ctx context.Context, id, viewerID string) (*EventVie
 	if err != nil {
 		return nil, err
 	}
-	return &EventView{Event: e, Attendance: a}, nil
+	v := &EventView{Event: e, Attendance: a}
+	if viewerID != "" && e.PriceCents > 0 {
+		if v.Ticket, err = s.store.Tickets().Paid(ctx, e.ID, viewerID); err != nil {
+			return nil, err
+		}
+	}
+	return v, nil
 }
 
 // ToggleRSVP marks userID as going, or not going if they already were.
@@ -194,6 +202,10 @@ func (in NewEvent) toEvent(organiserID string, now time.Time) (*repo.Event, erro
 	if err != nil || capacity < 1 {
 		return nil, fmt.Errorf("%w: capacity %q", ErrInvalidEvent, in.Capacity)
 	}
+	price, err := ParsePrice(in.Price)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidEvent, err)
+	}
 	return &repo.Event{
 		ID:          uuid.New().String(),
 		OrganiserID: organiserID,
@@ -202,6 +214,7 @@ func (in NewEvent) toEvent(organiserID string, now time.Time) (*repo.Event, erro
 		Location:    strings.TrimSpace(in.Location),
 		StartsAt:    startsAt,
 		Capacity:    capacity,
+		PriceCents:  price,
 		CreatedAt:   now,
 	}, nil
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/FyrmForge/hamr-example/gather/internal/repo"
 	"github.com/FyrmForge/hamr-example/gather/internal/service"
+	"github.com/FyrmForge/hamr-example/gather/internal/web/components"
 	"github.com/FyrmForge/hamr-example/gather/internal/web/components/form"
 )
 
@@ -22,20 +23,23 @@ type EventForm struct {
 	Location    string `form:"location"`
 	StartsAt    string `form:"starts_at"`
 	Capacity    string `form:"capacity"`
+	Price       string `form:"price"`
 	Description string `form:"description"`
 }
 
 type handler struct {
-	events *service.EventService
+	events  *service.EventService
+	tickets *service.TicketService
 
 	FormRules validate.Form
 }
 
 // NewHandler creates the events handler. The rules live here so the same
 // FormRules check one field on blur and the whole form on submit.
-func NewHandler(events *service.EventService) *handler {
+func NewHandler(events *service.EventService, tickets *service.TicketService) *handler {
 	return &handler{
-		events: events,
+		events:  events,
+		tickets: tickets,
 		FormRules: validate.NewForm(
 			validate.WithOOBRenderer(form.OOBValidator),
 			validate.WithTrim(true),
@@ -44,6 +48,7 @@ func NewHandler(events *service.EventService) *handler {
 			validate.Field("location", validate.MaxLen(120)),
 			validate.Field("starts_at", validate.Required, inTheFuture),
 			validate.Field("capacity", validate.Required, positiveInt),
+			validate.Field("price", price),
 			validate.Field("description", validate.MaxLen(2000)),
 		),
 	}
@@ -85,6 +90,23 @@ func (h *handler) RSVP(c echo.Context) error {
 	return respond.HTML(c, http.StatusOK, rsvpBlock(c, *a, ""))
 }
 
+// POST /events/:id/tickets opens Stripe Checkout (the hamr mock in
+// development) and sends the buyer there.
+func (h *handler) BuyTicket(c echo.Context) error {
+	id := c.Param("id")
+	url, err := h.tickets.Checkout(c.Request().Context(), id, middleware.GetSubjectID(c), origin(c)+"/events/"+id)
+	if errors.Is(err, service.ErrFreeEvent) {
+		return echo.NewHTTPError(http.StatusBadRequest, "this event is free")
+	}
+	if err != nil {
+		return err
+	}
+	if url == "" {
+		return echo.NewHTTPError(http.StatusNotFound, "event not found")
+	}
+	return respond.Redirect(c, url)
+}
+
 // GET /events/new
 func (h *handler) New(c echo.Context) error {
 	return respond.HTML(c, http.StatusOK, newPage(c, EventForm{}, nil))
@@ -104,6 +126,7 @@ func (h *handler) Create(c echo.Context) error {
 		Location:    f.Location,
 		StartsAt:    f.StartsAt,
 		Capacity:    f.Capacity,
+		Price:       f.Price,
 		Description: f.Description,
 	}
 	e, err := h.events.Create(c.Request().Context(), middleware.GetSubjectID(c), in)
@@ -125,6 +148,23 @@ func positiveInt(v string) string {
 		return "Enter a number of places above 0"
 	}
 	return ""
+}
+
+// price accepts an empty (free) or euro amount, using the same parser the
+// service stores it with.
+func price(v string) string {
+	if _, err := service.ParsePrice(v); err != nil {
+		return "Enter a price like 5 or 7.50, or leave it empty for a free event"
+	}
+	return ""
+}
+
+// origin is this site's scheme and host, for the absolute URLs Stripe needs.
+func origin(c echo.Context) string {
+	if components.BaseURL != "" {
+		return components.BaseURL
+	}
+	return c.Scheme() + "://" + c.Request().Host
 }
 
 // inTheFuture accepts a datetime-local value that has not passed yet.

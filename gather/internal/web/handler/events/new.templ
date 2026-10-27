@@ -88,6 +88,21 @@ templ eventForm(c echo.Context, f EventForm, errors map[string]string) {
 				@form.FieldError("capacity", form.GetError(errors, "capacity"))
 			</div>
 		</div>
+		<div class="mb-5">
+			<label for="price" class="block text-sm font-medium text-slate-400 mb-1">Ticket price in euros <span class="text-hamr-metal-light">(empty for free)</span></label>
+			<input
+				type="text"
+				inputmode="decimal"
+				id="price"
+				name="price"
+				value={ f.Price }
+				class={ inputClass }
+				hx-post="/events/validate/price"
+				hx-trigger="blur, hamr:revalidate"
+				hx-swap="none"
+			/>
+			@form.FieldError("price", form.GetError(errors, "price"))
+		</div>
 		<div class="mb-6">
 			<label for="description" class="block text-sm font-medium text-slate-400 mb-1">About the event</label>
 			<textarea

@@ -22,7 +22,13 @@ templ showPage(c echo.Context, v *service.EventView) {
 			if v.Event.Description != "" {
 				<p class="mt-4 text-hamr-metal-steel leading-relaxed whitespace-pre-line max-w-prose">{ v.Event.Description }</p>
 			}
-			@rsvpBlock(c, v.Attendance, "")
+			if c.QueryParam("ticket") == "paid" && v.Ticket == nil {
+				<p class="mt-6 text-sm text-yellow-300" role="status">Payment received. Your ticket appears here once Stripe confirms it; refresh in a moment.</p>
+			}
+			<div class="mt-8 flex flex-wrap items-center gap-4">
+				@rsvpBlock(c, v.Attendance, "")
+				@ticketBlock(c, v)
+			</div>
 		</main>
 	}
 }
@@ -30,7 +36,7 @@ templ showPage(c echo.Context, v *service.EventView) {
 // rsvpBlock is the button and the count. POST /events/:id/rsvp returns a new
 // one and htmx swaps it over this one, so the page never reloads.
 templ rsvpBlock(c echo.Context, a service.Attendance, notice string) {
-	<div id="rsvp" class="mt-8 flex flex-wrap items-center gap-4">
+	<div id="rsvp" class="flex flex-wrap items-center gap-4">
 		if components.GetUser(c) == nil {
 			<a href="/login" class="min-h-11 inline-flex items-center px-5 rounded-md bg-blue-500 hover:bg-blue-400 text-white font-medium">Log in to RSVP</a>
 		} else if a.IsGoing {
@@ -49,4 +55,19 @@ templ rsvpBlock(c echo.Context, a service.Attendance, notice string) {
 			<span class="text-sm text-yellow-300" role="status">{ notice }</span>
 		}
 	</div>
+}
+
+// ticketBlock offers a paid event's ticket, or shows the one the viewer bought.
+templ ticketBlock(c echo.Context, v *service.EventView) {
+	if v.Event.PriceCents > 0 {
+		if v.Ticket != nil {
+			<span class="min-h-11 inline-flex items-center px-5 rounded-md border border-green-600 text-green-300" data-testid="ticket-paid">Ticket bought · { service.FormatPrice(v.Ticket.AmountCents) }</span>
+		} else if components.GetUser(c) != nil {
+			<button type="button" hx-post={ "/events/" + v.Event.ID + "/tickets" } data-testid="buy-ticket" class="min-h-11 px-5 rounded-md bg-white text-slate-900 hover:bg-slate-200 font-medium">
+				Buy ticket · { service.FormatPrice(v.Event.PriceCents) }
+			</button>
+		} else {
+			<span class="text-sm text-hamr-metal-light">Tickets { service.FormatPrice(v.Event.PriceCents) }</span>
+		}
+	}
 }

@@ -198,12 +198,14 @@ func main() {
 	}
 
 	eventService := service.NewEventService(store, emailSender)
+	ticketService := service.NewTicketService(store, stripeClient)
 
 	api.RegisterRoutes(srv, &api.Deps{
 		Store: store,
 		WebhookSecret:   envStripeWebhookSecret,
 		WebhookSecretV2: envStripeWebhookSecretV2,
 		StripeClient:    stripeClient,
+		Tickets:         ticketService,
 	})
 
 	web.RegisterRoutes(srv, &web.Deps{
@@ -216,6 +218,7 @@ func main() {
 		SessionManager: sessionManager,
 		AuthService: authService,
 		EventService: eventService,
+		TicketService: ticketService,
 		FileStorage: fileStorage,
 		EmailSender: emailSender,
 	})

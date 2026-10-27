@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/stripe/stripe-go/v86/webhook"
 
 	"github.com/FyrmForge/hamr/pkg/logging"
+
+	"github.com/FyrmForge/hamr-example/gather/internal/service"
 )
 
 // maxBodyBytes limits the size of the incoming webhook payload. 512KB
@@ -21,6 +24,7 @@ type handler struct {
 	webhookSecret   string
 	webhookSecretV2 string
 	client          *stripe.Client
+	tickets         *service.TicketService
 	handlers        map[string]func(ctx context.Context, event stripe.Event) error
 	thinHandlers    map[string]func(ctx context.Context, n stripe.EventNotificationContainer) error
 }
@@ -35,11 +39,12 @@ type handler struct {
 // during `hamr dev` so unhandled events are visible at scaffold time
 // rather than silently 200-OK'd. Replace each stub body with your own
 // business logic; delete the entries you don't care about.
-func NewHandler(webhookSecret, webhookSecretV2 string, client *stripe.Client) *handler {
+func NewHandler(webhookSecret, webhookSecretV2 string, client *stripe.Client, tickets *service.TicketService) *handler {
 	h := &handler{
 		webhookSecret:   webhookSecret,
 		webhookSecretV2: webhookSecretV2,
 		client:          client,
+		tickets:         tickets,
 	}
 	h.handlers = map[string]func(ctx context.Context, event stripe.Event) error{
 		// Checkout sessions (mock fires from /__hamr/stripe/checkout buttons).
@@ -206,14 +211,24 @@ func (h *handler) handleRecipientCapabilityStatusUpdated(ctx context.Context, n 
 
 // --- Checkout sessions ---
 
+// handleCheckoutSessionCompleted marks the ticket paid. The session in the
+// event is the source of truth; the buyer's redirect back is not.
 func (h *handler) handleCheckoutSessionCompleted(ctx context.Context, event stripe.Event) error {
-	logging.FromContext(ctx).Info("checkout session completed", "eventID", event.ID)
-	return nil
+	var cs stripe.CheckoutSession
+	if err := json.Unmarshal(event.Data.Raw, &cs); err != nil {
+		return err
+	}
+	logging.FromContext(ctx).Info("checkout session completed", "eventID", event.ID, "session", cs.ID)
+	return h.tickets.CheckoutCompleted(ctx, &cs)
 }
 
 func (h *handler) handleCheckoutSessionExpired(ctx context.Context, event stripe.Event) error {
-	logging.FromContext(ctx).Info("checkout session expired", "eventID", event.ID)
-	return nil
+	var cs stripe.CheckoutSession
+	if err := json.Unmarshal(event.Data.Raw, &cs); err != nil {
+		return err
+	}
+	logging.FromContext(ctx).Info("checkout session expired", "eventID", event.ID, "session", cs.ID)
+	return h.tickets.CheckoutExpired(ctx, &cs)
 }
 
 func (h *handler) handleCheckoutSessionAsyncPaymentFailed(ctx context.Context, event stripe.Event) error {

@@ -18,12 +18,12 @@ type eventStore struct {
 	db *sqlx.DB
 }
 
-const eventColumns = `id, organiser_id, title, description, location, starts_at, capacity, created_at`
+const eventColumns = `id, organiser_id, title, description, location, starts_at, capacity, price_cents, created_at`
 
 func (s *eventStore) Create(ctx context.Context, e *repo.Event) error {
 	_, err := s.db.NamedExecContext(ctx,
 		`INSERT INTO events (`+eventColumns+`)
-		 VALUES (:id, :organiser_id, :title, :description, :location, :starts_at, :capacity, :created_at)`, e)
+		 VALUES (:id, :organiser_id, :title, :description, :location, :starts_at, :capacity, :price_cents, :created_at)`, e)
 	return err
 }
 

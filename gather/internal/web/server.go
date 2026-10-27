@@ -39,7 +39,8 @@ type Deps struct {
 
 	AuthService *service.AuthService
 
-	EventService *service.EventService
+	EventService  *service.EventService
+	TicketService *service.TicketService
 
 	FileStorage storage.FileStorage
 
@@ -105,12 +106,13 @@ func RegisterRoutes(srv *server.Server, deps *Deps) {
 	site.POST("/register", registerHandler.Submit, auth.RequireNotAuth())
 	site.POST("/register/validate/:field", registerHandler.FormRules.ValidationHandler("field"), auth.RequireNotAuth())
 
-	eventsHandler := events.NewHandler(deps.EventService)
+	eventsHandler := events.NewHandler(deps.EventService, deps.TicketService)
 	site.GET("/", eventsHandler.Index)
 	site.GET("/events/:id", eventsHandler.Show)
 	site.GET("/events/new", eventsHandler.New, auth.RequireAuth())
 	site.POST("/events", eventsHandler.Create, auth.RequireAuth())
 	site.POST("/events/:id/rsvp", eventsHandler.RSVP, auth.RequireAuth())
+	site.POST("/events/:id/tickets", eventsHandler.BuyTicket, auth.RequireAuth())
 	site.POST("/events/validate/:field", eventsHandler.FormRules.ValidationHandler("field"), auth.RequireAuth())
 }
 

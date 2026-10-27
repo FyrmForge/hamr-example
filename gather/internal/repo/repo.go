@@ -28,4 +28,7 @@ type Store interface {
 
 	// Events returns the event sub-store.
 	Events() EventStore
+
+	// Tickets returns the ticket sub-store.
+	Tickets() TicketStore
 }

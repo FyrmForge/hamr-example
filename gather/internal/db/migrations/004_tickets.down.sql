@@ -1,0 +1,4 @@
+BEGIN;
+DROP TABLE tickets;
+ALTER TABLE events DROP COLUMN price_cents;
+COMMIT;

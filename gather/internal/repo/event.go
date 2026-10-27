@@ -36,5 +36,6 @@ type Event struct {
 	Location    string    `db:"location"`
 	StartsAt    time.Time `db:"starts_at"`
 	Capacity    int       `db:"capacity"`
+	PriceCents  int       `db:"price_cents"` // 0: free, no tickets
 	CreatedAt   time.Time `db:"created_at"`
 }
