@@ -15,6 +15,16 @@ type EventStore interface {
 
 	// ListUpcoming returns events starting at or after from, soonest first.
 	ListUpcoming(ctx context.Context, from time.Time) ([]Event, error)
+
+	// AddRSVP records that userID is going. It returns false, and records
+	// nothing, when the event is already full.
+	AddRSVP(ctx context.Context, eventID, userID string) (bool, error)
+
+	// RemoveRSVP deletes userID's RSVP, if any.
+	RemoveRSVP(ctx context.Context, eventID, userID string) error
+
+	// RSVPs returns how many people are going and whether userID is one of them.
+	RSVPs(ctx context.Context, eventID, userID string) (count int, going bool, err error)
 }
 
 // Event is something people can sign up for.

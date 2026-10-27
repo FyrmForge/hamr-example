@@ -110,6 +110,7 @@ func RegisterRoutes(srv *server.Server, deps *Deps) {
 	site.GET("/events/:id", eventsHandler.Show)
 	site.GET("/events/new", eventsHandler.New, auth.RequireAuth())
 	site.POST("/events", eventsHandler.Create, auth.RequireAuth())
+	site.POST("/events/:id/rsvp", eventsHandler.RSVP, auth.RequireAuth())
 	site.POST("/events/validate/:field", eventsHandler.FormRules.ValidationHandler("field"), auth.RequireAuth())
 }
 

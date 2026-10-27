@@ -60,14 +60,29 @@ func (h *handler) Index(c echo.Context) error {
 
 // GET /events/:id
 func (h *handler) Show(c echo.Context) error {
-	e, err := h.events.Get(c.Request().Context(), c.Param("id"))
+	v, err := h.events.View(c.Request().Context(), c.Param("id"), middleware.GetSubjectID(c))
 	if err != nil {
 		return err
 	}
-	if e == nil {
+	if v == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "event not found")
 	}
-	return respond.HTML(c, http.StatusOK, showPage(c, e))
+	return respond.HTML(c, http.StatusOK, showPage(c, v))
+}
+
+// POST /events/:id/rsvp swaps the RSVP block (button and count) in place.
+func (h *handler) RSVP(c echo.Context) error {
+	a, err := h.events.ToggleRSVP(c.Request().Context(), c.Param("id"), middleware.GetSubjectID(c))
+	if errors.Is(err, service.ErrEventFull) {
+		return respond.HTML(c, http.StatusOK, rsvpBlock(c, *a, "Sorry, the last place just went."))
+	}
+	if err != nil {
+		return err
+	}
+	if a == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "event not found")
+	}
+	return respond.HTML(c, http.StatusOK, rsvpBlock(c, *a, ""))
 }
 
 // GET /events/new

@@ -28,3 +28,9 @@ func TestNewEventToEvent(t *testing.T) {
 		}
 	}
 }
+
+func TestAttendanceFull(t *testing.T) {
+	if (Attendance{Going: 39, Capacity: 40}).Full() || !(Attendance{Going: 40, Capacity: 40}).Full() {
+		t.Fatal("Full() wrong at the capacity boundary")
+	}
+}

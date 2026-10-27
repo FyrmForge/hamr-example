@@ -51,9 +51,77 @@ func (s *EventService) Create(ctx context.Context, organiserID string, in NewEve
 	return e, nil
 }
 
-// Get returns the event with id, or nil if there is none.
-func (s *EventService) Get(ctx context.Context, id string) (*repo.Event, error) {
-	return s.store.Events().GetByID(ctx, id)
+// ErrEventFull is returned when someone RSVPs to an event with no places left.
+var ErrEventFull = errors.New("event is full")
+
+// Attendance is the RSVP state of an event as one viewer sees it.
+type Attendance struct {
+	EventID  string
+	Going    int  // how many people are going
+	Capacity int  // places in total
+	IsGoing  bool // whether the viewer is one of them
+}
+
+// Full reports whether every place is taken.
+func (a Attendance) Full() bool { return a.Going >= a.Capacity }
+
+// EventView is an event plus its attendance for one viewer.
+type EventView struct {
+	Event      *repo.Event
+	Attendance Attendance
+}
+
+// View returns the event with id as viewerID sees it (viewerID may be
+// empty for a signed-out visitor), or nil if there is no such event.
+func (s *EventService) View(ctx context.Context, id, viewerID string) (*EventView, error) {
+	e, err := s.store.Events().GetByID(ctx, id)
+	if err != nil || e == nil {
+		return nil, err
+	}
+	a, err := s.attendance(ctx, e, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	return &EventView{Event: e, Attendance: a}, nil
+}
+
+// ToggleRSVP marks userID as going, or not going if they already were.
+// It returns ErrEventFull, with the current attendance, when there is no
+// place left, and (nil, nil) when the event doesn't exist.
+func (s *EventService) ToggleRSVP(ctx context.Context, eventID, userID string) (*Attendance, error) {
+	events := s.store.Events()
+	e, err := events.GetByID(ctx, eventID)
+	if err != nil || e == nil {
+		return nil, err
+	}
+	_, going, err := events.RSVPs(ctx, eventID, userID)
+	if err != nil {
+		return nil, err
+	}
+	var full bool
+	if going {
+		err = events.RemoveRSVP(ctx, eventID, userID)
+	} else {
+		var added bool
+		added, err = events.AddRSVP(ctx, eventID, userID)
+		full = !added
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rsvp: %w", err)
+	}
+	a, err := s.attendance(ctx, e, userID)
+	if err != nil {
+		return nil, err
+	}
+	if full {
+		return &a, ErrEventFull
+	}
+	return &a, nil
+}
+
+func (s *EventService) attendance(ctx context.Context, e *repo.Event, viewerID string) (Attendance, error) {
+	count, going, err := s.store.Events().RSVPs(ctx, e.ID, viewerID)
+	return Attendance{EventID: e.ID, Going: count, Capacity: e.Capacity, IsGoing: going}, err
 }
 
 // Upcoming lists events that have not started yet, soonest first.

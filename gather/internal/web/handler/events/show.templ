@@ -1,28 +1,52 @@
 package events
 
 import (
-	"strconv"
+	"fmt"
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/FyrmForge/hamr-example/gather/internal/repo"
+	"github.com/FyrmForge/hamr-example/gather/internal/service"
 	"github.com/FyrmForge/hamr-example/gather/internal/web/components"
 )
 
-templ showPage(c echo.Context, e *repo.Event) {
-	@components.Layout(c, e.Title) {
+templ showPage(c echo.Context, v *service.EventView) {
+	@components.Layout(c, v.Event.Title) {
 		<main class="max-w-2xl mx-auto px-4 py-10">
 			<p class="text-sm text-hamr-metal-light mb-2">
-				{ when(e) }
-				if e.Location != "" {
-					· { e.Location }
+				{ when(v.Event) }
+				if v.Event.Location != "" {
+					· { v.Event.Location }
 				}
 			</p>
-			<h1 class="text-3xl font-bold text-slate-100">{ e.Title }</h1>
-			if e.Description != "" {
-				<p class="mt-4 text-hamr-metal-steel leading-relaxed whitespace-pre-line max-w-prose">{ e.Description }</p>
+			<h1 class="text-3xl font-bold text-slate-100">{ v.Event.Title }</h1>
+			if v.Event.Description != "" {
+				<p class="mt-4 text-hamr-metal-steel leading-relaxed whitespace-pre-line max-w-prose">{ v.Event.Description }</p>
 			}
-			<p class="mt-6 text-sm text-hamr-metal-light">{ strconv.Itoa(e.Capacity) } places</p>
+			@rsvpBlock(c, v.Attendance, "")
 		</main>
 	}
+}
+
+// rsvpBlock is the button and the count. POST /events/:id/rsvp returns a new
+// one and htmx swaps it over this one, so the page never reloads.
+templ rsvpBlock(c echo.Context, a service.Attendance, notice string) {
+	<div id="rsvp" class="mt-8 flex flex-wrap items-center gap-4">
+		if components.GetUser(c) == nil {
+			<a href="/login" class="min-h-11 inline-flex items-center px-5 rounded-md bg-blue-500 hover:bg-blue-400 text-white font-medium">Log in to RSVP</a>
+		} else if a.IsGoing {
+			<button type="button" hx-post={ "/events/" + a.EventID + "/rsvp" } hx-target="#rsvp" hx-swap="outerHTML" data-testid="rsvp" class="min-h-11 px-5 rounded-md border border-green-600 text-green-300 hover:bg-green-900/40 font-medium">
+				You’re going · Cancel
+			</button>
+		} else if a.Full() {
+			<span class="min-h-11 inline-flex items-center px-5 rounded-md border border-hamr-metal-light/40 text-hamr-metal-light">Full</span>
+		} else {
+			<button type="button" hx-post={ "/events/" + a.EventID + "/rsvp" } hx-target="#rsvp" hx-swap="outerHTML" data-testid="rsvp" class="min-h-11 px-5 rounded-md bg-blue-500 hover:bg-blue-400 text-white font-medium">
+				I’m going
+			</button>
+		}
+		<span class="text-sm text-hamr-metal-light" data-testid="rsvp-count">{ fmt.Sprintf("%d of %d going", a.Going, a.Capacity) }</span>
+		if notice != "" {
+			<span class="text-sm text-yellow-300" role="status">{ notice }</span>
+		}
+	</div>
 }
