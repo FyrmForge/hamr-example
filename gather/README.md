@@ -66,3 +66,32 @@ docs/                    Documentation
 - **Templ** + HTMX
 - **PostgreSQL**
 - **HAMR Framework** — server, middleware, validation, responses
+
+## Deploy
+
+Gather ships as one binary in one image. Build it from this folder:
+
+```bash
+docker build -t gather -f cmd/site/Dockerfile .
+docker run -p 8080:8080 --env-file prod.env gather
+```
+
+Migrations run when the binary starts (`--migrate-startup`), so a deploy is
+"start the new image". The image serves `/api/health` for your platform's
+health check.
+
+Set these in production (and nothing from the dev block of `.env`):
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | your Postgres URL |
+| `BASE_URL` | the public origin, e.g. `https://gather.example.com` (cookie domain, CORS, Stripe return URLs) |
+| `STRIPE_KEY` | your secret key (`sk_live_...` or `sk_test_...`) |
+| `STRIPE_WEBHOOK_SECRET` | the signing secret of the Stripe webhook endpoint pointed at `/api/webhooks/stripe` |
+| `TRUSTED_PROXIES` | your load balancer's CIDRs, if there is one |
+
+Leave `DEV_MODE`, `STRIPE_MOCK` and `EMAIL_MOCK` unset: the mocks are off and
+the hamr dev widget, inbox and Stripe dashboard don't exist outside `hamr dev`.
+`STRIPE_MOCK=true` without `DEV_MODE=true` refuses to start. With no email
+provider wired in `cmd/site/main.go`, RSVP emails to organisers are skipped;
+plug any adapter that satisfies `email.Sender` there to send them.
