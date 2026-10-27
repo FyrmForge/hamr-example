@@ -51,6 +51,7 @@ templ nav(c echo.Context) {
 			<a href="/" class="font-bold text-lg text-hamr-metal-steel py-3">Gather</a>
 			<div class="ml-auto flex items-center gap-4 text-sm">
 				if user := GetUser(c); user != nil {
+					<a href="/events/new" class="py-3 hover:text-hamr-fire-glow">New event</a>
 					<span class="text-hamr-metal-light" data-testid="nav-user">{ user.Email }</span>
 					<input type="hidden" name="csrf_token" value={ csrfToken(c) }/>
 					<button type="button" hx-post="/logout" class="py-3 text-hamr-metal-steel hover:text-hamr-fire-glow">Log out</button>

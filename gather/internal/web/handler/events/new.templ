@@ -1,0 +1,106 @@
+package events
+
+import (
+	"github.com/labstack/echo/v4"
+
+	"github.com/FyrmForge/hamr-example/gather/internal/web/components"
+	"github.com/FyrmForge/hamr-example/gather/internal/web/components/form"
+)
+
+const inputClass = "w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-md text-slate-100 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+
+templ newPage(c echo.Context, f EventForm, errors map[string]string) {
+	@components.Layout(c, "New event") {
+		<main class="max-w-xl mx-auto px-4 py-10">
+			<h1 class="text-2xl font-bold text-slate-100 mb-6">New event</h1>
+			@eventForm(c, f, errors)
+		</main>
+	}
+}
+
+// eventForm is swapped in place on submit. Each input posts itself to the
+// validate route when it loses focus; the error comes back out of band into
+// its form.FieldError, so nothing else on the page moves.
+templ eventForm(c echo.Context, f EventForm, errors map[string]string) {
+	<form id="event-form" hx-post="/events" hx-target="#event-form" hx-swap="outerHTML">
+		@form.CSRFField(c)
+		if form.GetError(errors, "general") != "" {
+			<div class="mb-4 px-4 py-3 rounded-md border bg-red-900/50 border-red-700 text-red-300 text-sm">
+				{ form.GetError(errors, "general") }
+			</div>
+		}
+		<div class="mb-5">
+			<label for="title" class="block text-sm font-medium text-slate-400 mb-1">Title</label>
+			<input
+				type="text"
+				id="title"
+				name="title"
+				value={ f.Title }
+				class={ inputClass }
+				hx-post="/events/validate/title"
+				hx-trigger="blur, hamr:revalidate"
+				hx-swap="none"
+			/>
+			@form.FieldError("title", form.GetError(errors, "title"))
+		</div>
+		<div class="mb-5">
+			<label for="location" class="block text-sm font-medium text-slate-400 mb-1">Where</label>
+			<input
+				type="text"
+				id="location"
+				name="location"
+				value={ f.Location }
+				class={ inputClass }
+				hx-post="/events/validate/location"
+				hx-trigger="blur, hamr:revalidate"
+				hx-swap="none"
+			/>
+			@form.FieldError("location", form.GetError(errors, "location"))
+		</div>
+		<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+			<div class="mb-5">
+				<label for="starts_at" class="block text-sm font-medium text-slate-400 mb-1">Starts</label>
+				<input
+					type="datetime-local"
+					id="starts_at"
+					name="starts_at"
+					value={ f.StartsAt }
+					class={ inputClass }
+					hx-post="/events/validate/starts_at"
+					hx-trigger="blur, hamr:revalidate"
+					hx-swap="none"
+				/>
+				@form.FieldError("starts_at", form.GetError(errors, "starts_at"))
+			</div>
+			<div class="mb-5">
+				<label for="capacity" class="block text-sm font-medium text-slate-400 mb-1">Places</label>
+				<input
+					type="text"
+					inputmode="numeric"
+					id="capacity"
+					name="capacity"
+					value={ f.Capacity }
+					class={ inputClass }
+					hx-post="/events/validate/capacity"
+					hx-trigger="blur, hamr:revalidate"
+					hx-swap="none"
+				/>
+				@form.FieldError("capacity", form.GetError(errors, "capacity"))
+			</div>
+		</div>
+		<div class="mb-6">
+			<label for="description" class="block text-sm font-medium text-slate-400 mb-1">About the event</label>
+			<textarea
+				id="description"
+				name="description"
+				rows="4"
+				class={ inputClass }
+				hx-post="/events/validate/description"
+				hx-trigger="blur, hamr:revalidate"
+				hx-swap="none"
+			>{ f.Description }</textarea>
+			@form.FieldError("description", form.GetError(errors, "description"))
+		</div>
+		<button type="submit" class="w-full sm:w-auto min-h-11 py-2 px-6 bg-blue-500 hover:bg-blue-400 text-white font-medium rounded-md transition-colors">Create event</button>
+	</form>
+}

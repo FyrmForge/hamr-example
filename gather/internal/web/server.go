@@ -20,6 +20,7 @@ import (
 	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/auth/login"
 	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/auth/register"
 	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/devemail"
+	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/events"
 	"github.com/FyrmForge/hamr-example/gather/internal/web/handler/home"
 )
 
@@ -106,6 +107,11 @@ func RegisterRoutes(srv *server.Server, deps *Deps) {
 	site.GET("/register", registerHandler.Page, auth.RequireNotAuth())
 	site.POST("/register", registerHandler.Submit, auth.RequireNotAuth())
 	site.POST("/register/validate/:field", registerHandler.FormRules.ValidationHandler("field"), auth.RequireNotAuth())
+
+	eventsHandler := events.NewHandler(deps.EventService)
+	site.GET("/events/new", eventsHandler.New, auth.RequireAuth())
+	site.POST("/events", eventsHandler.Create, auth.RequireAuth())
+	site.POST("/events/validate/:field", eventsHandler.FormRules.ValidationHandler("field"), auth.RequireAuth())
 }
 
 // RegisterStaticPages registers handlers for static generation and runtime
