@@ -19,3 +19,7 @@ cd gather && hamr dev
 Compare two steps with `git diff gather/step-04 gather/step-05`, or on GitHub at
 `compare/gather/step-04...gather/step-05`.
 
+
+## CI
+
+`.github/workflows/examples.yml` builds every example, checks its committed build output, and runs its unit and end-to-end tests on each push and pull request and every Monday. When HAMR releases, send a `repository_dispatch` of type `hamr-release` with `{"version": "vX.Y.Z"}` (or run the workflow by hand with a version): each example is upgraded to that version first, so a release that breaks a guide fails here.

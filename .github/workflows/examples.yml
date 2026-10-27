@@ -1,0 +1,94 @@
+name: Examples
+
+# Builds and tests every example app. Runs on pushes and pull requests, every
+# Monday, and when HAMR publishes a release: send a repository_dispatch of type
+# "hamr-release" with {"version": "vX.Y.Z"} (or run it by hand with a version)
+# and each example is upgraded to that HAMR version before it is built, so a
+# release that breaks a guide shows up here instead of in a reader's terminal.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  repository_dispatch:
+    types: [hamr-release]
+  workflow_dispatch:
+    inputs:
+      hamr_version:
+        description: "HAMR version to test against (e.g. v0.46.0); empty keeps each example's pinned version"
+        required: false
+
+jobs:
+  example:
+    name: ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [gather]
+    defaults:
+      run:
+        working-directory: ${{ matrix.example }}
+    env:
+      HAMR_UPGRADE: ${{ github.event.client_payload.version || github.event.inputs.hamr_version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ matrix.example }}/go.mod
+          cache-dependency-path: ${{ matrix.example }}/go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ${{ matrix.example }}/frontend/package-lock.json
+
+      - name: Upgrade HAMR to ${{ env.HAMR_UPGRADE }}
+        if: env.HAMR_UPGRADE != ''
+        run: |
+          go get github.com/FyrmForge/hamr@"$HAMR_UPGRADE"
+          go mod tidy
+
+      # Installs the hamr CLI and templ at the versions in go.mod.
+      - name: Install tools
+        run: |
+          make install
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Skipped when testing an upgrade: a new templ version changes every
+      # generated header, and make build regenerates them anyway.
+      - name: Generated templ files are up to date
+        if: env.HAMR_UPGRADE == ''
+        run: make templ-check
+
+      - name: Build
+        run: make build
+
+      # Each tag of the guide must be buildable as checked out: compiled CSS,
+      # fingerprinted assets, the static manifest and generated pages are
+      # committed. Skipped when testing an upgrade, which may change them.
+      - name: Build output is committed
+        if: env.HAMR_UPGRADE == ''
+        run: |
+          if [ -n "$(git status --porcelain -- .)" ]; then
+            echo "::error::make build changed committed files; run it locally and commit the result"
+            git status --porcelain -- .
+            exit 1
+          fi
+
+      - name: Vet
+        run: |
+          go vet ./...
+          go vet -tags=e2e ./e2e
+
+      - name: Unit tests
+        run: go test ./...
+
+      # Containerised: Postgres and the app image via testcontainers, a
+      # headless browser via go-rod.
+      - name: End-to-end tests
+        run: make e2e
