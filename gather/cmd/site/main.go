@@ -148,7 +148,6 @@ func main() {
 
 	// Auth service.
 	authService := service.NewAuthService(store)
-	eventService := service.NewEventService(store)
 
 	// File storage (local).
 	fileStorage, err := storage.NewLocalStorage(envStoragePath)
@@ -197,6 +196,8 @@ func main() {
 		emailSender = emailmock.New(envHamrDevURL)
 		log.Info("email mock enabled", "inbox", envHamrDevURL+"/__hamr/mail")
 	}
+
+	eventService := service.NewEventService(store, emailSender)
 
 	api.RegisterRoutes(srv, &api.Deps{
 		Store: store,

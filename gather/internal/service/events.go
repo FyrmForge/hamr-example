@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FyrmForge/hamr/pkg/email"
+	"github.com/FyrmForge/hamr/pkg/logging"
 	"github.com/google/uuid"
 
 	"github.com/FyrmForge/hamr-example/gather/internal/repo"
@@ -29,14 +31,20 @@ type NewEvent struct {
 	Capacity    string
 }
 
+// mailFrom is the sender of Gather's notifications.
+// ponytail: fixed address; read it from the environment when Gather sends from a real domain.
+var mailFrom = email.Addr("Gather", "no-reply@gather.example")
+
 // EventService holds the event rules.
 type EventService struct {
 	store repo.Store
+	mail  email.Sender // nil: notifications are skipped
 }
 
-// NewEventService creates a new event service.
-func NewEventService(store repo.Store) *EventService {
-	return &EventService{store: store}
+// NewEventService creates a new event service. mail may be nil (no email
+// provider configured); RSVPs then work without notifying anyone.
+func NewEventService(store repo.Store, mail email.Sender) *EventService {
+	return &EventService{store: store, mail: mail}
 }
 
 // Create checks in and stores it as an event organised by organiserID.
@@ -116,7 +124,48 @@ func (s *EventService) ToggleRSVP(ctx context.Context, eventID, userID string) (
 	if full {
 		return &a, ErrEventFull
 	}
+	if !going {
+		s.notifyOrganiser(ctx, e, userID, a)
+	}
 	return &a, nil
+}
+
+// notifyOrganiser emails the organiser that userID is going. A failed email
+// is logged, not returned: the RSVP itself has already succeeded.
+func (s *EventService) notifyOrganiser(ctx context.Context, e *repo.Event, userID string, a Attendance) {
+	if s.mail == nil || e.OrganiserID == userID {
+		return
+	}
+	log := logging.FromContext(ctx)
+	organiser, err := s.store.Users().GetByID(ctx, e.OrganiserID)
+	if err != nil || organiser == nil {
+		log.Error("rsvp email: load organiser", "event", e.ID, "error", err)
+		return
+	}
+	guest, err := s.store.Users().GetByID(ctx, userID)
+	if err != nil || guest == nil {
+		log.Error("rsvp email: load guest", "event", e.ID, "error", err)
+		return
+	}
+	if _, err := s.mail.Send(ctx, rsvpEmail(e, organiser, guest, a)); err != nil {
+		log.Error("rsvp email: send", "event", e.ID, "error", err)
+	}
+}
+
+// rsvpEmail is the message an organiser gets when someone says they're going.
+func rsvpEmail(e *repo.Event, organiser, guest *repo.User, a Attendance) email.Message {
+	who := guest.Name
+	if who == "" {
+		who = guest.Email
+	}
+	return email.Message{
+		From:    mailFrom,
+		To:      []email.Address{email.Addr(organiser.Name, organiser.Email)},
+		Subject: fmt.Sprintf("%s is going to %s", who, e.Title),
+		Text: fmt.Sprintf("%s (%s) just RSVPed to %s on %s.\n\n%d of %d places are taken.\n",
+			who, guest.Email, e.Title, e.StartsAt.Format("Mon 2 Jan, 15:04"), a.Going, a.Capacity),
+		Tags: map[string]string{"kind": "rsvp"},
+	}
 }
 
 func (s *EventService) attendance(ctx context.Context, e *repo.Event, viewerID string) (Attendance, error) {
